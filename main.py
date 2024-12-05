@@ -12,19 +12,30 @@ from dotenv import load_dotenv
 from contextlib import asynccontextmanager
 from fastapi.responses import HTMLResponse, StreamingResponse  # Add StreamingResponse here
 import asyncio
+import time
+
 load_dotenv()
 
 # Setup logging
 logger = setup_logger('main')
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Process documents on startup."""
     try:
+        # Cleanup existing index
+        if os.getenv('PINECONE_INDEX_NAME') in vector_store.pc.list_indexes().names():
+            logger.info("Cleaning up existing index")
+            vector_store.pc.delete_index(os.getenv('PINECONE_INDEX_NAME'))
+            
+        # Wait for deletion to complete
+        time.sleep(5)
+        
         logger.info("Processing documents on startup")
         results = doc_processor.process_all_documents()
         
-        # Index all documents in vector store
+        # Index documents
         for doc_result in results:
             chunks = doc_result['chunks']
             texts = [chunk['text'] for chunk in chunks]
@@ -37,6 +48,7 @@ async def lifespan(app: FastAPI):
         logger.error(f"Error during startup document processing: {str(e)}", exc_info=True)
         raise
     yield
+
 # Initialize FastAPI app
 app = FastAPI(lifespan=lifespan)
 templates = Jinja2Templates(directory="templates")

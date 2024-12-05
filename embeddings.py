@@ -7,10 +7,11 @@ from utils.logger import setup_logger
 logger = setup_logger('embeddings')
 
 class CustomEmbeddings(Embeddings):
-    def __init__(self, model_name: str = "sentence-transformers/all-MiniLM-L6-v2"):
-        """Initialize embeddings with MiniLM model."""
+
+    def __init__(self, model_name: str = "BAAI/bge-large-en-v1.5"):  # Much better model
+        """Initialize embeddings with BGE model."""
         self.model = SentenceTransformer(model_name)
-        self.embedding_size = 384  # all-MiniLM-L6-v2 embedding size
+        self.embedding_size = 1024  # BGE model embedding size
 
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
         """Embed a list of documents."""

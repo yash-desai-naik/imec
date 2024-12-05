@@ -25,85 +25,121 @@ class RAGQueryEngine:
     def _preprocess_query(self, query: str) -> str:
         """Preprocess the query for better matching."""
         # Normalize article references
-        query = re.sub(r'(?i)art\.?\s*(\d+)', r'article \1', query)
+        query = re.sub(r'(?i)art\.?\s*(\d+)', r'Article \1', query)
         query = re.sub(r'(?i)article\s+(\d+)', r'Article \1', query)
         
-        # Expand common abbreviations
-        query = query.replace('exp', 'explain')
-        query = query.replace('desc', 'describe')
+        # Fix double word issue
+        query = query.replace('explainlain', 'explain')
+        
+        # Remove any multiple spaces
+        query = ' '.join(query.split())
         
         logger.info(f"Preprocessed query: {query}")
         return query
 
     def process_query(self, query: str) -> str:
-        """Process a query using RAG."""
         try:
             logger.info(f"Processing query: {query}")
             processed_query = self._preprocess_query(query)
             
+            # Extract article number if present
+            article_match = re.search(r'(?i)Article\s+(\d+)', processed_query)
+            article_num = article_match.group(1) if article_match else None
+            
             # Get relevant documents
-            docs = self.vector_store.similarity_search(processed_query, k=4)
+            k = 4
+            docs = self.vector_store.similarity_search(processed_query, k=k * 2)  # Get more docs initially
+            
+            # Filter and sort documents
+            if article_num and docs:
+                # Prioritize exact article matches
+                docs = sorted(docs, key=lambda x: (
+                    x['metadata'].get('article_number') == article_num,  # Exact matches first
+                    x['metadata'].get('score', 0)  # Then by score
+                ), reverse=True)
+                docs = docs[:k]  # Take top k after sorting
             
             if not docs:
                 return "I couldn't find any relevant information to answer your question."
             
-            # Create a more structured context with better formatting
+            # Create context with better structure
             context_parts = []
             for doc in docs:
-                # Extract meaningful metadata
-                section = doc['metadata'].get('section', '').strip()
-                page = doc['metadata'].get('page_number', '')
                 score = doc['metadata'].get('score', 0)
-                
-                # Only include high-confidence matches
-                if score >= 0.5:  # Increased confidence threshold
-                    context = f"""
-                    {'Section: ' + section if section else ''}
-                    {'Page: ' + str(page) if page else ''}
-                    Content: {doc['text'].strip()}
-                    """
-                    context_parts.append(context.strip())
-            
+                if score >= 0.3:
+                    article_num = doc['metadata'].get('article_number', '')
+                    article_title = doc['metadata'].get('article_title', '')
+                    is_partial = doc['metadata'].get('is_partial', False)
+                    part_info = f"(Part {doc['metadata'].get('part_number')}/{doc['metadata'].get('total_parts')})" if is_partial else ""
+                    
+                    context = (
+                        f"Article {article_num}: {article_title} {part_info}\n"
+                        f"{'=' * 40}\n"
+                        f"{doc['text'].strip()}\n"
+                        f"Relevance Score: {score:.2f}\n"
+                        f"{'-' * 40}"
+                    )
+                    context_parts.append(context)
+
             if not context_parts:
                 return "I couldn't find any sufficiently relevant information to answer your question accurately. Could you please rephrase or be more specific?"
-            
-            # Create a more focused prompt
-            line_separator = "-" * 80
-            context_text = ("\n" + line_separator + "\n").join(context_parts)
 
-            prompt = (
-                "You are an expert assistant analyzing a legal or business document. "
-                "Answer the question using only the information from the provided context. "
-                "Be specific and detail-oriented.\n\n"
-                f"Context (from most to least relevant):\n{line_separator}\n{context_text}\n{line_separator}\n\n"
-                f"Question: {processed_query}\n\n"
-                "Instructions:\n"
-                "1. Focus only on the information present in the context\n"
-                "2. Quote relevant parts of the text when appropriate\n"
-                "3. If the context doesn't contain enough information, say so clearly\n"
-                "4. If referenced articles/sections are mentioned in the context, include their details\n"
-                "5. Maintain a professional, precise tone\n"
-                "6. Format the response clearly with proper paragraph breaks\n\n"
-                "Detailed answer:"
+            prompt_template = """You are analyzing the IBF-AMOSUP/IMEC Agreement for 2024-2025. Answer the question using only the provided article(s). Be specific and detail-oriented.
+
+            Document Context:
+            {context_separator}
+            {context_content}
+            {context_separator}
+
+            Question: {question}
+
+            Instructions:
+            1. Answer based ONLY on the provided article(s)
+            2. Quote specific sections when relevant
+            3. Include article numbers and titles in your response
+            4. If information is missing or unclear, say so
+            5. Use professional, precise language
+            6. If asked about a specific article, focus on that article's content
+            7. Format your response with:
+            - Article reference (number and title)
+            - Key provisions/points
+            - Relevant quotes
+            - Additional context if available
+
+            Detailed Response:"""
+
+            # Build the context content with separators
+            context_separator = '-' * 80
+            context_content = ('\n' + context_separator + '\n').join(context_parts)
+
+            # Format the final prompt
+            prompt = prompt_template.format(
+                context_separator=context_separator,
+                context_content=context_content,
+                question=processed_query
             )
-            
+
+            print(prompt)  # For debugging
+
+
             try:
                 chat_completion = self.client.chat.completions.create(
                     messages=[
                         {
                             "role": "system",
-                            "content": """You are a knowledgeable legal/business document analyst. 
-                            Your responses should be:
-                            - Precise and specific to the context
-                            - Well-structured and clear
-                            - Professional in tone
-                            - Based solely on the provided information
-                            Always quote relevant portions of the text to support your explanations."""
+                            "content": """You are analyzing the IBF-AMOSUP/IMEC Agreement for 2024-2025.
+                            You are a maritime legal expert who:
+                            - Provides precise, article-specific responses
+                            - Uses direct quotes from the text
+                            - Maintains professional language
+                            - Clearly indicates when information is missing
+                            - Focuses on the specific article(s) mentioned in the query
+                            - Structures responses in a clear, logical manner"""
                         },
                         {"role": "user", "content": prompt}
                     ],
                     model=self.model,
-                    temperature=0.2,  # Lower temperature for more focused responses
+                    temperature=0.1,  # Very low temperature for consistent, focused responses
                     max_tokens=1000
                 )
                 

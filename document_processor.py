@@ -1,3 +1,4 @@
+import re
 import os
 from typing import Dict, List, Optional, Tuple
 from docx import Document
@@ -24,8 +25,8 @@ class DocumentProcessor:
         
         self.tokenizer = tiktoken.get_encoding("cl100k_base")
         self.text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=1000,     # Larger chunks to capture more context
-            chunk_overlap=200,    # Significant overlap
+            chunk_size=500,      # Smaller chunks for more precise matching
+            chunk_overlap=100,   # Good overlap for context
             length_function=self._token_count,
             separators=["\n\n", "\n", ".", "!", "?", ",", " ", ""]
         )
@@ -62,7 +63,7 @@ class DocumentProcessor:
             raise
     
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
-    # In document_processor.py
+        # In document_processor.py
     def process_document(self, file_path: str) -> Dict:
         try:
             doc = Document(file_path)
@@ -71,95 +72,77 @@ class DocumentProcessor:
             metadata = {
                 'doc_id': doc_id,
                 'filename': os.path.basename(file_path),
-                'processed_timestamp': datetime.utcnow().isoformat(),
-                'file_path': file_path
+                'title': 'IBF-AMOSUP/IMEC AGREEMENT 2024-2025',
+                'processed_timestamp': datetime.utcnow().isoformat()
             }
             
-            # Better section handling
-            sections = []
-            current_section = {
-                'heading': '',
-                'content': [],
-                'level': 0,
-                'parent_heading': ''
-            }
+            # Collect all text first
+            full_text = []
+            for para in doc.paragraphs:
+                if para.text.strip():
+                    full_text.append(para.text.strip())
             
-            # Stack to keep track of parent headings
-            heading_stack = []
+            # Join the full text and split into potential articles
+            text = '\n'.join(full_text)
+            # Split on Article or ART. pattern
+            potential_articles = re.split(r'(?i)(?=(?:Article|ART\.)\s+\d+[:\s])', text)
             
-            for paragraph in doc.paragraphs:
-                if paragraph.style.name.startswith('Heading'):
-                    # Process previous section
-                    if current_section['content']:
-                        sections.append(current_section.copy())
-                    
-                    # Get heading level
-                    level = int(paragraph.style.name[-1]) if paragraph.style.name[-1].isdigit() else 1
-                    
-                    # Update heading stack
-                    while heading_stack and heading_stack[-1]['level'] >= level:
-                        heading_stack.pop()
-                    
-                    parent_heading = heading_stack[-1]['heading'] if heading_stack else ''
-                    
-                    # Create new section
-                    current_section = {
-                        'heading': paragraph.text,
-                        'content': [],
-                        'level': level,
-                        'parent_heading': parent_heading
-                    }
-                    
-                    heading_stack.append({
-                        'heading': paragraph.text,
-                        'level': level
-                    })
-                    
-                elif paragraph.text.strip():
-                    current_section['content'].append(paragraph.text)
-            
-            # Add final section
-            if current_section['content']:
-                sections.append(current_section)
-            
-            # Create chunks with better context
             chunks = []
-            seen_content = set()  # For deduplication
-            
-            for section in sections:
-                # Create hierarchical section path
-                section_path = f"{section['parent_heading']} > {section['heading']}" if section['parent_heading'] else section['heading']
-                
-                # Combine content with context
-                section_text = f"{section_path}\n\n" if section_path else ""
-                section_text += " ".join(section['content'])
-                
-                # Split into chunks
-                section_chunks = self.text_splitter.split_text(section_text)
-                
-                for i, chunk in enumerate(section_chunks):
-                    # Normalize chunk for deduplication
-                    normalized_chunk = ' '.join(chunk.split())
+            for article_text in potential_articles:
+                if not article_text.strip():
+                    continue
                     
-                    if normalized_chunk not in seen_content:
-                        seen_content.add(normalized_chunk)
-                        
+                # Extract article number and title
+                article_match = re.match(r'(?i)(?:Article|ART\.)\s+(\d+)[:\s]*(.*?)(?:\n|$)', article_text)
+                if article_match:
+                    article_num = article_match.group(1)
+                    article_title = article_match.group(2).strip()
+                    article_content = article_text[article_match.end():].strip()
+                    
+                    # Create chunk with complete article context
+                    chunk_text = f"Article {article_num}: {article_title}\n\n{article_content}"
+                    
+                    # Split large articles into smaller chunks while preserving context
+                    if len(chunk_text) > 1000:
+                        # Split into smaller chunks
+                        sub_chunks = self.text_splitter.split_text(article_content)
+                        for i, sub_chunk in enumerate(sub_chunks):
+                            chunk_metadata = {
+                                **metadata,
+                                'article_number': str(article_num),
+                                'article_title': article_title or "Untitled",
+                                'is_partial': True,
+                                'part_number': i + 1,
+                                'total_parts': len(sub_chunks),
+                                'chunk_type': 'article_section'
+                            }
+                            
+                            # Include article context in each chunk
+                            formatted_chunk = (
+                                f"Article {article_num}: {article_title}\n"
+                                f"Part {i + 1} of {len(sub_chunks)}\n\n"
+                                f"{sub_chunk}"
+                            )
+                            
+                            chunks.append({
+                                'text': formatted_chunk,
+                                'metadata': chunk_metadata
+                            })
+                    else:
                         chunk_metadata = {
                             **metadata,
-                            'section': section['heading'],
-                            'parent_section': section['parent_heading'],
-                            'section_level': section['level'],
-                            'chunk_number': i,
-                            'total_chunks': len(section_chunks),
-                            'chunk_size': self._token_count(chunk)
+                            'article_number': str(article_num),
+                            'article_title': article_title or "Untitled",
+                            'is_partial': False,
+                            'chunk_type': 'complete_article'
                         }
                         
                         chunks.append({
-                            'text': chunk,
+                            'text': chunk_text,
                             'metadata': chunk_metadata
                         })
             
-            logger.info(f"Created {len(chunks)} unique chunks with improved context")
+            logger.info(f"Created {len(chunks)} chunks from document")
             return {
                 'doc_id': doc_id,
                 'chunks': chunks,
@@ -167,5 +150,5 @@ class DocumentProcessor:
             }
             
         except Exception as e:
-         logger.error(f"Error processing document: {str(e)}", exc_info=True)
-         raise
+            logger.error(f"Error processing document: {str(e)}", exc_info=True)
+            raise
