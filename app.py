@@ -35,110 +35,219 @@ def initialize_nltk():
 
 initialize_nltk()
 
-
-
 class DocumentProcessor:
-    def __init__(self, docs_dir: str, chunk_size: int = 10000, chunk_overlap: int = 6000):
+    def __init__(self, docs_dir: str, chunk_size: int = 50000, chunk_overlap: int = 30000):
         self.docs_dir = Path(docs_dir)
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
-        
+
     def get_document_hash(self, file_path: Path) -> str:
         """Generate MD5 hash of document for change detection"""
         with open(file_path, 'rb') as f:
             return hashlib.md5(f.read()).hexdigest()
     
-    def preprocess_text(self, text: str) -> str:
-        """Preprocess text to standardize article references"""
-        # Standardize article references
-        text = re.sub(r'(?i)article\s+(\d+)', r'Article \1', text)
-        text = re.sub(r'(?i)articles\s+(\d+)', r'Article \1', text)
-        return text
     
-    def extract_docx_content(self, doc) -> List[Dict]:
-        """Extract content while preserving structure and articles"""
+    def extract_page_numbers(self, doc) -> Dict[int, int]:
+        """Extract page numbers for paragraphs"""
+        page_map = {}
+        current_page = 1
+        
+        for idx, paragraph in enumerate(doc.paragraphs):
+            # Check for page breaks
+            for run in paragraph.runs:
+                if '<w:br w:type="page"/>' in run._element.xml:
+                    current_page += 1
+                    
+            page_map[idx] = current_page
+            
+        return page_map
+
+    def find_article_boundaries(self, doc) -> List[Dict]:
+        """Find article boundaries in the document with page numbers"""
+        articles = []
+        current_article = []
+        current_article_number = None
+        start_page = 1
+        end_page = 1
+        page_map = self.extract_page_numbers(doc)
+        
+        for idx, paragraph in enumerate(doc.paragraphs):
+            text = paragraph.text.strip()
+            if not text:
+                continue
+            
+            current_page = page_map.get(idx, 1)
+            
+            # Check for new article
+            article_match = re.match(r'(?i)^\s*article\s+(\d+)[:\.]?\s*', text)
+            if article_match:
+                # Save previous article if exists
+                if current_article:
+                    articles.append({
+                        'number': current_article_number,
+                        'content': current_article,
+                        'pages': {
+                            'start': start_page,
+                            'end': end_page
+                        }
+                    })
+                current_article = []
+                current_article_number = article_match.group(1)
+                start_page = current_page
+            
+            current_article.append(text)
+            end_page = current_page
+        
+        # Add the last article
+        if current_article:
+            articles.append({
+                'number': current_article_number,
+                'content': current_article,
+                'pages': {
+                    'start': start_page,
+                    'end': end_page
+                }
+            })
+        
+        return articles
+
+
+    def detect_section_type(self, text: str, style_name: str) -> Dict:
+        """Detect the type and details of a section"""
+        text = text.strip()
+        if not text:
+            return None
+            
+        # Check for various section types
+        article_match = re.match(r'(?i)^\s*article\s+(\d+)[:\.]?\s*', text)
+        toc_match = re.match(r'(?i)^\s*(table\s+of\s+contents|contents)', text)
+        appendix_match = re.match(r'(?i)^\s*(appendix|annex)\s+([A-Za-z0-9])[:\.]?\s*', text)
+        section_match = re.match(r'(?i)^\s*(section|chapter)\s+(\d+)[:\.]?\s*', text)
+        
+        if article_match:
+            return {
+                'type': 'article',
+                'number': article_match.group(1),
+                'title': text
+            }
+        elif toc_match:
+            return {
+                'type': 'toc',
+                'title': text
+            }
+        elif appendix_match:
+            return {
+                'type': 'appendix',
+                'number': appendix_match.group(2),
+                'title': text
+            }
+        elif section_match:
+            return {
+                'type': 'section',
+                'number': section_match.group(2),
+                'title': text
+            }
+        elif style_name.startswith('Heading'):
+            return {
+                'type': 'heading',
+                'title': text
+            }
+            
+        return None
+
+    def extract_document_structure(self, doc) -> List[Dict]:
+        """Extract all document content with structure preservation"""
         sections = []
         current_section = []
-        current_heading = "Default"
+        current_metadata = None
+        document_stats = {
+            'articles': set(),
+            'sections': set(),
+            'appendices': set()
+        }
         
         for paragraph in doc.paragraphs:
             text = paragraph.text.strip()
             if not text:
                 continue
                 
-            # Check for article headers
-            article_match = re.match(r'(?i)^article\s+(\d+)', text)
-            if article_match or paragraph.style.name.startswith('Heading'):
+            # Detect section type
+            section_info = self.detect_section_type(text, paragraph.style.name)
+            
+            if section_info:
+                # Save previous section if exists
                 if current_section:
                     sections.append({
-                        'heading': current_heading,
-                        'content': '\n'.join(current_section)
+                        'metadata': current_metadata,
+                        'content': current_section
                     })
+                
                 current_section = []
-                current_heading = text
+                current_metadata = section_info
+                
+                # Update document statistics
+                if section_info['type'] == 'article':
+                    document_stats['articles'].add(section_info['number'])
+                elif section_info['type'] == 'section':
+                    document_stats['sections'].add(section_info['number'])
+                elif section_info['type'] == 'appendix':
+                    document_stats['appendices'].add(section_info['number'])
             
-            # Preprocess text before adding
-            processed_text = self.preprocess_text(text)
-            current_section.append(processed_text)
-
+            current_section.append(text)
+        
         # Add the last section
         if current_section:
             sections.append({
-                'heading': current_heading,
-                'content': '\n'.join(current_section)
+                'metadata': current_metadata,
+                'content': current_section
             })
-
+        
+        # Add document statistics as a special section
+        stats_text = [
+            "Document Statistics:",
+            f"Total Articles: {len(document_stats['articles'])}",
+            f"Total Sections: {len(document_stats['sections'])}",
+            f"Total Appendices: {len(document_stats['appendices'])}"
+        ]
+        
+        sections.append({
+            'metadata': {'type': 'statistics', 'title': 'Document Statistics'},
+            'content': stats_text
+        })
+        
         return sections
 
     def process_docx(self, file_path: Path) -> List[Dict]:
-        """Process a single DOCX file into chunks with metadata"""
+        """Process document with comprehensive content handling"""
         doc = Document(file_path)
-        sections = self.extract_docx_content(doc)
+        sections = self.extract_document_structure(doc)
         
-        all_chunks = []
-        for idx, section in enumerate(sections):
-            # Split the content into sentences and create chunks
-            sentences = sent_tokenize(section['content'])
-            current_chunk = []
-            current_length = 0
-            
-            for sentence in sentences:
-                current_chunk.append(sentence)
-                current_length += len(sentence)
+        chunks = []
+        for section in sections:
+            if not section['metadata']:
+                continue
                 
-                # Check if we should create a new chunk
-                if current_length >= self.chunk_size:
-                    chunk_text = f"Section: {section['heading']}\n" + " ".join(current_chunk)
-                    all_chunks.append({
-                        'text': chunk_text,
-                        'metadata': {
-                            'source': str(file_path),
-                            'section': section['heading'],
-                            'chunk_index': f"{idx}-{len(all_chunks)}",
-                            'timestamp': datetime.now().isoformat()
-                        }
-                    })
-                    
-                    # Keep some sentences for overlap
-                    overlap_sentences = current_chunk[-self.chunk_overlap//50:]  # Approximate number of sentences
-                    current_chunk = overlap_sentences
-                    current_length = sum(len(s) for s in current_chunk)
+            # Keep section content together
+            section_text = "\n".join(section['content'])
             
-            # Add the last chunk if there's anything left
-            if current_chunk:
-                chunk_text = f"Section: {section['heading']}\n" + " ".join(current_chunk)
-                all_chunks.append({
-                    'text': chunk_text,
-                    'metadata': {
-                        'source': str(file_path),
-                        'section': section['heading'],
-                        'chunk_index': f"{idx}-{len(all_chunks)}",
-                        'timestamp': datetime.now().isoformat()
-                    }
-                })
-                
-        return all_chunks
-
+            # Create metadata
+            metadata = {
+                'source': str(file_path),
+                'type': section['metadata']['type'],
+                'title': section['metadata']['title'],
+                'timestamp': datetime.now().isoformat()
+            }
+            
+            # Add specific metadata based on type
+            if section['metadata']['type'] in ['article', 'section', 'appendix']:
+                metadata['number'] = section['metadata']['number']
+            
+            chunks.append({
+                'text': section_text,
+                'metadata': metadata
+            })
+        
+        return chunks
 
 class RAGSystem:
     def __init__(self, docs_dir: str, db_dir: str):
@@ -181,7 +290,7 @@ class RAGSystem:
         # Load or initialize document hashes
         self.hashes_file = self.db_dir / "document_hashes.json"
         self.document_hashes = self._load_document_hashes()
-        
+
     def _load_document_hashes(self) -> Dict[str, str]:
         if self.hashes_file.exists():
             with open(self.hashes_file, 'r') as f:
@@ -191,7 +300,8 @@ class RAGSystem:
     def _save_document_hashes(self):
         with open(self.hashes_file, 'w') as f:
             json.dump(self.document_hashes, f)
-            
+
+
     def update_knowledge_base(self):
         current_files = list(self.docs_dir.glob("*.docx"))
         
@@ -204,10 +314,41 @@ class RAGSystem:
                     self.collection.delete(where={"source": str(file_path)})
                 
                 chunks = self.processor.process_docx(file_path)
+                
+                if not chunks:
+                    print(f"Warning: No content found in {file_path}")
+                    continue
+                
                 texts = [chunk['text'] for chunk in chunks]
                 embeddings = self.embedding_model.encode(texts).tolist()
                 metadatas = [chunk['metadata'] for chunk in chunks]
-                ids = [f"{file_path}_{chunk['metadata']['chunk_index']}" for chunk in chunks]
+                
+                # Generate unique IDs using content hash
+                ids = []
+                used_ids = set()  # Track used IDs to ensure uniqueness
+                
+                for idx, chunk in enumerate(chunks):
+                    metadata = chunk['metadata']
+                    content_type = metadata.get('type', 'general')
+                    content_hash = hashlib.md5(chunk['text'].encode()).hexdigest()[:8]
+                    
+                    # Create base ID
+                    if content_type in ['article', 'section', 'appendix'] and 'number' in metadata:
+                        base_id = f"{file_path}_{content_type}_{metadata['number']}"
+                    else:
+                        base_id = f"{file_path}_{content_type}_{idx}"
+                    
+                    # Ensure ID uniqueness by adding content hash
+                    id_str = f"{base_id}_{content_hash}"
+                    
+                    # In the unlikely event of a collision, append an index
+                    counter = 1
+                    while id_str in used_ids:
+                        id_str = f"{base_id}_{content_hash}_{counter}"
+                        counter += 1
+                    
+                    used_ids.add(id_str)
+                    ids.append(id_str)
                 
                 # Add chunks in smaller batches to handle large documents
                 batch_size = 100
@@ -222,93 +363,108 @@ class RAGSystem:
                 
                 self.document_hashes[str(file_path)] = current_hash
         
-        current_file_paths = [str(f) for f in current_files]
-        for file_path in list(self.document_hashes.keys()):
-            if file_path not in current_file_paths:
-                print(f"Removing deleted file: {file_path}")
-                self.collection.delete(where={"source": file_path})
-                del self.document_hashes[file_path]
-        
         self._save_document_hashes()
 
-    def query(self, question: str, n_results: int = 5) -> Dict:
-        """Query the RAG system with improved article search"""
-        # Preprocess the question
-        processor = DocumentProcessor("")  # Empty path as we don't need it here
-        processed_question = processor.preprocess_text(question)
-        
-        # Extract article number if present
-        article_match = re.search(r'(?i)article\s+(\d+)', processed_question)
-        article_number = article_match.group(1) if article_match else None
+    def query(self, question: str, n_results: int = 3) -> Dict:
+        # Analyze question for specific content requests
+        article_match = re.search(r'(?i)article\s+(\d+)', question)
+        toc_match = re.search(r'(?i)table\s+of\s+contents|toc', question)
+        stats_match = re.search(r'(?i)how\s+many|total|count|number\s+of', question)
         
         # Generate embedding for the question
-        question_embedding = self.embedding_model.encode(processed_question).tolist()
+        question_embedding = self.embedding_model.encode(question).tolist()
         
-        # Modify the query based on whether we're searching for a specific article
-        if article_number:
-            # Use only text search for exact article matches
-            results = self.collection.query(
-                query_embeddings=[question_embedding],
-                where={"$contains": f"Article {article_number}"},
-                n_results=n_results
-            )
-        else:
-            # Use semantic search without where clause
-            results = self.collection.query(
-                query_embeddings=[question_embedding],
-                n_results=n_results
-            )
-        
-        # Construct prompt with enhanced context
-        context_parts = []
-        seen_articles = set()
-        
-        for doc, meta in zip(results['documents'][0], results['metadatas'][0]):
-            # Check for article references
-            article_matches = re.finditer(r'(?i)article\s+(\d+)', doc)
-            articles = [m.group(0) for m in article_matches]
-            
-            # Add to context if new article found or if specifically searching for an article
-            if articles:
-                for article in articles:
-                    if article.lower() not in seen_articles:
-                        seen_articles.add(article.lower())
-                        section_info = f"Section: {meta['section']}" if 'section' in meta else ""
-                        context_parts.append(
-                            f"Source: {meta['source']}\n{section_info}\nContent: {doc}"
-                        )
-            elif article_number:  # Include context if specifically searching for an article
-                section_info = f"Section: {meta['section']}" if 'section' in meta else ""
-                context_parts.append(
-                    f"Source: {meta['source']}\n{section_info}\nContent: {doc}"
+        try:
+            # Handle different types of queries
+            if article_match:
+                results = self.collection.query(
+                    query_embeddings=[question_embedding],
+                    where={"$and": [
+                        {"type": "article"},
+                        {"number": article_match.group(1)}
+                    ]},
+                    n_results=1
                 )
-        
-        context = "\n\n---\n\n".join(context_parts)
-        
-        prompt = f"""You are a helpful assistant answering questions based on the provided context.
-        When explaining articles, always include the complete article text and explanation.
-        Always cite your sources using the filename and section from the context.
-        If the specific article or information cannot be found in the context, say so clearly.
+            elif toc_match:
+                results = self.collection.query(
+                    query_embeddings=[question_embedding],
+                    where={"type": "toc"},
+                    n_results=1
+                )
+            elif stats_match:
+                results = self.collection.query(
+                    query_embeddings=[question_embedding],
+                    where={"type": "statistics"},
+                    n_results=1
+                )
+            else:
+                results = self.collection.query(
+                    query_embeddings=[question_embedding],
+                    n_results=n_results
+                )
 
-        Context:
-        {context}
+            if not results['ids'][0]:
+                return {
+                    'answer': "I couldn't find the requested information in the document.",
+                    'sources': []
+                }
 
-        Question: {processed_question}
+            # Build context from results
+            context_parts = []
+            for doc, meta in zip(results['documents'][0], results['metadatas'][0]):
+                section_type = meta.get('type', 'Section')
+                title = meta.get('title', '')
+                if section_type in ['article', 'section', 'appendix']:
+                    section_info = f"{section_type.title()} {meta.get('number', '')}: {title}"
+                else:
+                    section_info = title
+                
+                context_parts.append(f"Source: {meta['source']}\n{section_info}:\n{doc}")
 
-        Answer:"""
+            context = "\n\n---\n\n".join(context_parts)
+            
+            prompt = f"""You are a helpful assistant explaining content from a document. Please follow these instructions carefully:
 
-        # Query Groq
-        response = self.groq_client.chat.completions.create(
-            messages=[{"role": "user", "content": prompt}],
-            model="mixtral-8x7b-32768",
-            temperature=0.2,
-        )
+1. Provide accurate answers based on the context provided.
+2. For articles, sections, or appendices, include their complete text first, then explain if needed.
+3. For statistics or counts, ensure accuracy and cite the specific numbers found in the document.
+4. Always include relevant section numbers and titles in your response.
+5. If the requested information isn't in the context, say so clearly.
 
-        return {
-            'answer': response.choices[0].message.content,
-            'sources': [f"{meta['source']} (Section: {meta.get('section', 'N/A')})" 
-                    for meta in results['metadatas'][0]]
-        }
+Context:
+{context}
+
+Question: {question}
+
+Answer:"""
+
+            response = self.groq_client.chat.completions.create(
+                messages=[{"role": "user", "content": prompt}],
+                model="mixtral-8x7b-32768",
+                temperature=0.1,
+            )
+
+            # Format sources
+            sources = []
+            for meta in results['metadatas'][0]:
+                section_type = meta.get('type', 'Section').title()
+                if section_type in ['Article', 'Section', 'Appendix']:
+                    source = f"{meta['source']} ({section_type} {meta.get('number', '')})"
+                else:
+                    source = f"{meta['source']} ({meta.get('title', 'General Content')})"
+                sources.append(source)
+
+            return {
+                'answer': response.choices[0].message.content,
+                'sources': sources
+            }
+            
+        except Exception as e:
+            print(f"Error during query: {e}")
+            return {
+                'answer': "I encountered an error while searching. Please try again.",
+                'sources': []
+            }
 
     def get_feedback(self, question: str, answer: str, feedback: str):
         feedback_file = self.db_dir / "feedback.jsonl"
