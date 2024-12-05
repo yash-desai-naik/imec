@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Document QA System</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100 min-h-screen">
+    <div class="container mx-auto px-4 py-8">
+        <h1 class="text-3xl font-bold text-center mb-8">Document QA System</h1>
+        
+        <!-- Query Section -->
+        <div class="max-w-2xl mx-auto bg-white rounded-lg shadow-md p-6">
+            <h2 class="text-xl font-semibold mb-4">Ask a Question</h2>
+            <div class="space-y-4">
+                <div>
+                    <textarea id="question" rows="3" class="w-full p-2 border rounded-md" placeholder="Enter your question..."></textarea>
+                </div>
+                <button onclick="submitQuery()" class="w-full bg-blue-500 text-white py-2 px-4 rounded-md hover:bg-blue-600 transition-colors">
+                    Submit Query
+                </button>
+            </div>
+            
+            <!-- Response Section -->
+            <div id="response" class="mt-6 hidden">
+                <h3 class="font-semibold mb-2">Answer:</h3>
+                <div id="answer" class="p-4 bg-gray-50 rounded-md"></div>
+                
+                <div id="sources" class="mt-4">
+                    <h3 class="font-semibold mb-2">Sources:</h3>
+                    <ul id="sourcesList" class="list-disc pl-5 space-y-2"></ul>
+                </div>
+            </div>
+            
+            <!-- Loading Indicator -->
+            <div id="loading" class="hidden mt-4 text-center">
+                <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500 mx-auto"></div>
+                <p class="mt-2 text-gray-600">Processing your query...</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- In index.html, update the script section -->
+<script>
+    let currentStream = null;
+
+    async function submitQuery() {
+        const question = document.getElementById('question').value.trim();
+        if (!question) return;
+
+        // Show loading, hide response
+        const loading = document.getElementById('loading');
+        const response = document.getElementById('response');
+        const answer = document.getElementById('answer');
+        
+        loading.classList.remove('hidden');
+        response.classList.add('hidden');
+        
+        // Close any existing stream
+        if (currentStream) {
+            currentStream.close();
+        }
+
+        try {
+            // Try streaming first
+            currentStream = new EventSource(`/stream-query?question=${encodeURIComponent(question)}`);
+            let fullResponse = '';
+
+            currentStream.onmessage = (event) => {
+                if (event.data === '[DONE]') {
+                    currentStream.close();
+                    loading.classList.add('hidden');
+                    return;
+                }
+
+                fullResponse += event.data + ' ';
+                answer.textContent = fullResponse;
+                response.classList.remove('hidden');
+            };
+
+            currentStream.onerror = async (error) => {
+                // If streaming fails, fall back to regular query
+                currentStream.close();
+                
+                try {
+                    const response = await fetch('/query', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({ question })
+                    });
+
+                    const data = await response.json();
+
+                    if (response.ok) {
+                        answer.textContent = data.response;
+                        document.getElementById('response').classList.remove('hidden');
+                    } else {
+                        throw new Error(data.detail || 'Unknown error');
+                    }
+                } catch (error) {
+                    answer.textContent = `Error: ${error.message}`;
+                    response.classList.remove('hidden');
+                }
+            };
+
+        } catch (error) {
+            answer.textContent = `Error: ${error.message}`;
+            response.classList.remove('hidden');
+        } finally {
+            loading.classList.add('hidden');
+        }
+    }
+
+    // Cleanup on page unload
+    window.onbeforeunload = () => {
+        if (currentStream) {
+            currentStream.close();
+        }
+    };
+</script>
+</body>
+</html>
