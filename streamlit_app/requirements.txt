@@ -1,11 +1,27 @@
-faiss-cpu
-groq
-langchain-groq
-PyPDF2
-langchain_google_genai
-langchain
-streamlit
-langchain_community
-python-dotenv
-pypdf
-google-cloud-aiplatform>=1.38
+# Core dependencies
+streamlit>=1.31.0
+langchain>=0.1.0
+langchain-community>=0.0.10
+langchain-core>=0.1.10
+
+# Vector store and embeddings
+faiss-cpu>=1.7.4
+PyPDF2>=3.0.0
+pypdf>=3.17.1
+
+# LLM providers
+langchain-groq>=0.0.1
+google-cloud-aiplatform>=1.38.0
+langchain-google-genai>=0.0.5
+
+# Utilities
+python-dotenv>=1.0.0
+
+# Additional helpful packages
+numpy>=1.24.0
+pandas>=2.1.0
+pydantic>=2.0.0
+typing-extensions>=4.8.0
+aiohttp>=3.9.0
+tiktoken>=0.5.1  # For token counting
+tenacity>=8.2.0  # For retrying failed API calls
