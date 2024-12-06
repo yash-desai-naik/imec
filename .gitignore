@@ -46,7 +46,7 @@ logs/
 log/
 
 # Project specific
-docs/
+!docs/
 .pytest_cache/
 .coverage
 htmlcov/
