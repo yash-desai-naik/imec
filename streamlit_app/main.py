@@ -8,6 +8,27 @@ from database import DocumentDatabase
 from utils import is_toc_query
 from prompts import REGULAR_PROMPT, TOC_PROMPT
 
+# Hide sidebar by default
+st.set_page_config(
+    page_title="IMEC Document Q&A System",
+    initial_sidebar_state="collapsed"
+)
+
+# Add custom CSS to hide Streamlit's default menu and footer
+st.markdown("""
+    <style>
+        #MainMenu {visibility: hidden;}
+        footer {visibility: hidden;}
+        .stDeployButton {display:none;}
+        [data-testid="collapsedControl"] {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            color: #0f4c81;
+        }
+    </style>
+""", unsafe_allow_html=True)
+
 def process_question(question: str, llm, db, config):
     start_time = time.process_time()
     
@@ -60,7 +81,6 @@ def process_question(question: str, llm, db, config):
     except Exception as e:
         st.error(f"Error processing question: {str(e)}")
         st.error("Please try rephrasing your question or contact support if the issue persists.")
-        # Print detailed error for debugging
         st.write(f"Debug info: {type(e).__name__}")
 
 def init_llm(api_key: str, config):
