@@ -34,13 +34,22 @@ def get_css_styles():
                 box-shadow: 0 0 1px #ff5c75 !important;
             }
 
+            /* Button container for alignment */
+            .button-container {
+                display: flex;
+                justify-content: flex-start;
+                align-items: center;
+                gap: 1rem;
+                margin-top: 0.5rem;
+            }
+
+            /* Button styling */
             .stButton > button {
-                width: 100%;
-                padding: 0.5rem 1rem;
+                width: auto !important;
+                padding: 0.5rem 2rem !important;
                 font-size: 16px;
                 font-weight: 500;
                 border-radius: 10px;
-                margin-top: 4px;
                 background-color: #ff5c75;
                 color: white;
                 border: none;
@@ -57,15 +66,11 @@ def get_css_styles():
                 padding-top: 1rem !important;
             }
 
-            .input-container {
-                margin-bottom: 2rem;
-            }
-
+            /* Keyboard hint styling */
             .keyboard-hint {
                 color: #666;
                 font-size: 0.8rem;
-                text-align: right;
-                margin-top: 4px;
+                margin-left: 1rem;
             }
 
             .stApp {

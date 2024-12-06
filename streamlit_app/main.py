@@ -89,27 +89,27 @@ def create_input_interface():
     if 'textarea_value' not in st.session_state:
         st.session_state.textarea_value = ''
     
-    col1, col2 = st.columns([5, 1])
+    # Text area for question input
+    question = st.text_area(
+        "Enter your question about the documents:",
+        key="question_input",
+        height=100,
+        placeholder="Type your question here...",
+        label_visibility="visible"
+    )
+    
+    # Create a flex container for button and hint
+    col1, col2 = st.columns([6,4])
     
     with col1:
-        question = st.text_area(
-            "Enter your question about the documents:",
-            key="question_input",
-            height=100,
-            placeholder="Type your question here...",
-            label_visibility="visible"
-        )
-
-    with col2:
-        st.write("")  # Space for alignment
-        ask_button = st.button(
-            "Ask Question",
-            key="ask_button",
-            use_container_width=True,
-            type="primary"
-        )
-        st.markdown('<div class="keyboard-hint">Press ⌘/Ctrl + Enter to submit</div>', 
-                   unsafe_allow_html=True)
+        with st.container():
+            ask_button = st.button(
+                "Ask Question",
+                key="ask_button",
+                type="primary"
+            )
+    
+    
     
     return question, ask_button
 
