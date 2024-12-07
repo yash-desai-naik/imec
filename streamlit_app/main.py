@@ -9,6 +9,7 @@ from utils import is_toc_query
 from prompts import REGULAR_PROMPT, TOC_PROMPT
 # Import and apply CSS
 from styles import get_css_styles
+from feedback_store import FeedbackStore
 
 
 # Hide sidebar by default and set dark theme
@@ -30,10 +31,14 @@ def init_llm(api_key: str, config):
     )
 
 def process_question(question: str, llm, db, config):
-    """Process a question and display results"""
+    """Process a question and display results with feedback integration"""
     start_time = time.process_time()
     
     try:
+        # Check for existing feedback
+        feedback = st.session_state.feedback_store.get_feedback(question)
+        
+        # Get model response
         is_toc = is_toc_query(question)
         prompt = TOC_PROMPT if is_toc else REGULAR_PROMPT
         k_value = config.toc_k_value if is_toc else config.search_k_value
@@ -53,28 +58,64 @@ def process_question(question: str, llm, db, config):
             }
             
             response = document_chain.invoke(chain_input)
+            
+            if isinstance(response, dict):
+                response = response.get("answer", response)
         
         processing_time = time.process_time() - start_time
         
-        st.write("### Answer")
-        if isinstance(response, dict):
-            st.markdown(response.get("answer", response))
-        else:
-            st.markdown(response)
+        # Display results with feedback
+        # st.write("### Answer")
+        
+        # If feedback exists, show it prominently
+        if feedback:
+            st.warning("""
+                ⚠️ **Note**: Previous feedback indicates this information needed correction:
+                
+                {}
+                
+                _This feedback was provided by a user and may need verification._
+                """.format(feedback["feedback"]))
+        
+        # Show model response
+        st.markdown(response)
         
         st.write(f"_Processing time: {processing_time:.2f} seconds_")
+
+        # Show warning that AI generated answer
+        st.markdown("<p style='font-size: 0.8em; font-style: italic; color: #888;'>AI-generated response. Please double-check.</p>", unsafe_allow_html=True)
+        # # Show sources
+        # with st.expander("📚 Source Sections", expanded=False):
+        #     for i, doc in enumerate(results, 1):
+        #         page_num = doc.metadata.get('page', 'Unknown')
+        #         st.markdown(f"**Source {i} (Page {page_num}):**")
+        #         st.markdown(doc.page_content)
+        #         st.divider()
         
-        with st.expander("📚 Source Sections", expanded=False):
-            for i, doc in enumerate(results, 1):
-                page_num = doc.metadata.get('page', 'Unknown')
-                st.markdown(f"**Source {i} (Page {page_num}):**")
-                st.markdown(doc.page_content)
-                st.divider()
+        # Feedback section
+        with st.expander("📝 Provide Feedback", expanded=False):
+            feedback_text = st.text_area(
+                "If this answer needs correction, please provide feedback:",
+                key="feedback_input",
+                height=100
+            )
+            
+            if st.button("Submit Feedback"):
+                if feedback_text.strip():
+                    st.session_state.feedback_store.add_feedback(
+                        question=question,
+                        original_answer=response,
+                        feedback=feedback_text
+                    )
+                    st.success("Thank you for your feedback! It will help improve future responses.")
+                else:
+                    st.error("Please enter feedback before submitting.")
                 
     except Exception as e:
         st.error(f"Error processing question: {str(e)}")
         st.error("Please try rephrasing your question or contact support if the issue persists.")
         st.write(f"Debug info: {type(e).__name__}")
+
 
 def handle_submit(question: str):
     """Handle question submission"""
@@ -130,6 +171,9 @@ def main():
                 st.success("✅ Document database initialized successfully!")
                 time.sleep(1)
                 st.rerun()
+    # Initialize feedback store if not already initialized
+    if 'feedback_store' not in st.session_state:
+        st.session_state.feedback_store = FeedbackStore()
     
     # Initialize LLM if not already initialized
     if 'llm' not in st.session_state:

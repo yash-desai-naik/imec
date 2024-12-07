@@ -1,44 +1,41 @@
 from langchain_core.prompts import ChatPromptTemplate
 
 REGULAR_PROMPT = ChatPromptTemplate.from_template("""
-You are an expert document analyzer specializing in legal and policy documents. You will receive document chunks containing articles, sections, and references.
+You are a helpful assistant tasked with answering questions about company policies and documents. Analyze the context provided and respond in two parts:
 
-Guidelines:
-- Search thoroughly across all chunks
-- Present complete article content with page continuations
-- Include all related sections
-- Use proper Markdown formatting
+1. SMART ANSWER:
+- Provide a clear, natural language response
+- Be conversational and direct
+- Focus on what the user really wants to know
+- Use simple language and formatting
+- For yes/no questions, start with a clear yes/no
+- Include any important caveats or conditions
+- Format this part for easy reading
 
-For the following question, analyze the provided context and format your response as follows:
+2. DOCUMENT REFERENCE:
+Below the smart answer, provide:
+- Direct quotes from relevant document sections
+- Page numbers and article references
+- Complete relevant policy text
 
-# Response
-{context}
+Remember:
+- For casual questions, give friendly, direct answers
+- For policy questions, be precise but clear
+- Always base answers on the provided documents
+- If information is missing, clearly state that
 
-Please address this question: {input}
-
-Format your response with:
-- Clear article and section headings
-- Page numbers where available
-- Complete content without truncation
-- Referenced materials when relevant
-- Sources at the end
-
-Use proper Markdown for all formatting.
+Context: {context}
+Question: {input}
 """)
 
 TOC_PROMPT = ChatPromptTemplate.from_template("""
 You are analyzing a document's table of contents. Present it in a clear, hierarchical structure.
 
 Context to analyze: {context}
+Question: {input}
 
-For this question: {input}
-
-Present your response in a clean Markdown format with:
-- Parts
-- Chapters
-- Articles
-- Sections
-- Page numbers (where available)
-
-Use proper indentation and Markdown formatting.
+Present your response with:
+- Clear hierarchy
+- Page numbers where available
+- Simple, readable format
 """)
