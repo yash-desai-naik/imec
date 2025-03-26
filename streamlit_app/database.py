@@ -5,6 +5,7 @@ from langchain_community.document_loaders import PyPDFDirectoryLoader
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document
+import os
 
 class DocumentDatabase:
     def __init__(self, vector_config):
@@ -19,9 +20,10 @@ class DocumentDatabase:
             self.embeddings = GoogleGenerativeAIEmbeddings(
                 model=self.config.embedding_model
             )
+            return True
         except Exception as e:
             st.error(f"Error initializing embeddings: {str(e)}")
-            raise
+            return False
     
     def get_document_splitters(self) -> Tuple[RecursiveCharacterTextSplitter, RecursiveCharacterTextSplitter]:
         common_separators = [
@@ -59,6 +61,11 @@ class DocumentDatabase:
         return regular_splitter, toc_splitter
     
     def process_documents(self, docs: List[Document]) -> Tuple[List[Document], List[Document]]:
+        """Process documents with safe handling for empty document lists"""
+        if not docs:
+            st.warning("No documents found in the docs directory. Please add PDF documents.")
+            return [], []
+            
         regular_splitter, toc_splitter = self.get_document_splitters()
         
         # Process regular documents with metadata preservation
@@ -74,13 +81,41 @@ class DocumentDatabase:
         return regular_docs, toc_docs
     
     def initialize_vector_stores(self) -> bool:
+        """Initialize the vector stores with error handling"""
         try:
-            self.initialize_embeddings()
-            loader = PyPDFDirectoryLoader("./docs")
+            # First initialize embeddings
+            if not self.initialize_embeddings():
+                return False
+                
+            # Check if docs directory exists
+            docs_dir = "./docs"
+            if not os.path.exists(docs_dir):
+                os.makedirs(docs_dir)
+                st.warning(f"Created empty docs directory at {docs_dir}. Please add PDF documents.")
+                return False
+                
+            # Check if directory contains PDF files
+            pdf_files = [f for f in os.listdir(docs_dir) if f.lower().endswith('.pdf')]
+            if not pdf_files:
+                st.warning(f"No PDF files found in {docs_dir}. Please add PDF documents.")
+                return False
+            
+            # Load documents
+            loader = PyPDFDirectoryLoader(docs_dir)
             docs = loader.load()
             
+            if not docs:
+                st.warning("No content could be extracted from the PDF files. Please check the documents.")
+                return False
+            
+            # Process documents
             regular_docs, toc_docs = self.process_documents(docs)
             
+            if not regular_docs or not toc_docs:
+                st.warning("Could not process documents properly. Please check file content.")
+                return False
+                
+            # Create vector stores
             self.regular_vectors = FAISS.from_documents(
                 regular_docs,
                 self.embeddings
@@ -97,27 +132,48 @@ class DocumentDatabase:
             return False
     
     def get_comprehensive_results(self, query: str, k_value: int, is_toc: bool = False) -> List[Document]:
-        vectors = self.toc_vectors if is_toc else self.regular_vectors
-        
-        # Get results using multiple search strategies
-        similarity_results = vectors.similarity_search(query, k=k_value)
-        mmr_results = vectors.max_marginal_relevance_search(
-            query,
-            k=k_value,
-            fetch_k=k_value * 3,
-            lambda_mult=0.7
-        )
-        
-        # Combine and deduplicate results
-        seen_contents = set()
-        combined_results = []
-        
-        for doc in similarity_results + mmr_results:
-            if doc.page_content not in seen_contents:
-                seen_contents.add(doc.page_content)
-                combined_results.append(doc)
-        
-        return combined_results[:k_value * 2]
+        """Get search results with error handling"""
+        try:
+            if is_toc and self.toc_vectors:
+                vectors = self.toc_vectors
+            elif not is_toc and self.regular_vectors:
+                vectors = self.regular_vectors
+            else:
+                st.error("Vector stores not properly initialized")
+                return []
+            
+            # Get results using multiple search strategies
+            similarity_results = vectors.similarity_search(query, k=k_value)
+            
+            try:
+                mmr_results = vectors.max_marginal_relevance_search(
+                    query,
+                    k=k_value,
+                    fetch_k=k_value * 3,
+                    lambda_mult=0.7
+                )
+            except Exception:
+                # Fall back to similarity search if MMR fails
+                mmr_results = []
+            
+            # Combine and deduplicate results
+            seen_contents = set()
+            combined_results = []
+            
+            for doc in similarity_results + mmr_results:
+                if doc.page_content not in seen_contents:
+                    seen_contents.add(doc.page_content)
+                    combined_results.append(doc)
+            
+            return combined_results[:k_value * 2] if combined_results else []
+            
+        except Exception as e:
+            st.error(f"Error retrieving search results: {str(e)}")
+            return []
     
     def reinitialize(self):
+        """Reinitialize vector stores"""
+        self.embeddings = None
+        self.regular_vectors = None
+        self.toc_vectors = None
         return self.initialize_vector_stores()
