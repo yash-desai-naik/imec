@@ -1,11 +1,12 @@
 import streamlit as st
 import time
+import os
 from langchain_groq import ChatGroq
 from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain_core.prompts import ChatPromptTemplate
 from config import load_config
 from database import DocumentDatabase
-from utils import is_toc_query  # Changed from streamlit_app.utils to utils
+from utils import is_toc_query
 from prompts import REGULAR_PROMPT, TOC_PROMPT
 # Import and apply CSS
 from styles import get_css_styles
@@ -45,6 +46,10 @@ def process_question(question: str, llm, db, config):
         
         with st.spinner("Searching documents..."):
             results = db.get_comprehensive_results(question, k_value, is_toc)
+            
+            if not results:
+                st.warning("No relevant content found. Please try a different question or make sure documents are properly loaded.")
+                return
         
         with st.spinner("Analyzing content..."):
             document_chain = create_stuff_documents_chain(
@@ -64,9 +69,6 @@ def process_question(question: str, llm, db, config):
         
         processing_time = time.process_time() - start_time
         
-        # Display results with feedback
-        # st.write("### Answer")
-        
         # If feedback exists, show it prominently
         if feedback:
             st.warning("""
@@ -84,13 +86,6 @@ def process_question(question: str, llm, db, config):
 
         # Show warning that AI generated answer
         st.markdown("<p style='font-size: 0.8em; font-style: italic; color: #888;'>AI-generated response. Please double-check.</p>", unsafe_allow_html=True)
-        # # Show sources
-        # with st.expander("📚 Source Sections", expanded=False):
-        #     for i, doc in enumerate(results, 1):
-        #         page_num = doc.metadata.get('page', 'Unknown')
-        #         st.markdown(f"**Source {i} (Page {page_num}):**")
-        #         st.markdown(doc.page_content)
-        #         st.divider()
         
         # Feedback section
         with st.expander("📝 Provide Feedback", expanded=False):
@@ -121,7 +116,10 @@ def handle_submit(question: str):
     """Handle question submission"""
     if question.strip():
         with st.spinner("Processing your question..."):
-            process_question(question, st.session_state.llm, st.session_state.db, st.session_state.vector_config)
+            if 'db' in st.session_state and st.session_state.db is not None:
+                process_question(question, st.session_state.llm, st.session_state.db, st.session_state.vector_config)
+            else:
+                st.error("Document database not properly initialized. Please try reinitializing the database.")
     else:
         st.warning("Please enter a question first.")
 
@@ -150,9 +148,31 @@ def create_input_interface():
                 type="primary"
             )
     
-    
-    
     return question, ask_button
+
+def ensure_docs_directory():
+    """Ensure the docs directory exists"""
+    docs_dir = "./docs"
+    if not os.path.exists(docs_dir):
+        os.makedirs(docs_dir)
+        st.warning(f"""
+        The docs directory was created at {docs_dir}.
+        
+        Please add PDF documents to this directory for analysis.
+        """)
+        return False
+        
+    # Check if directory contains PDF files
+    pdf_files = [f for f in os.listdir(docs_dir) if f.lower().endswith('.pdf')]
+    if not pdf_files:
+        st.warning(f"""
+        No PDF files found in {docs_dir}.
+        
+        Please add PDF documents to this directory for analysis.
+        """)
+        return False
+        
+    return True
 
 def main():
     # Load configuration
@@ -162,32 +182,68 @@ def main():
     if 'vector_config' not in st.session_state:
         st.session_state.vector_config = vector_config
     
-    # Initialize database if not already initialized
-    if 'db' not in st.session_state:
-        with st.spinner("Initializing document database..."):
-            db = DocumentDatabase(vector_config)
-            if db.initialize_vector_stores():
-                st.session_state.db = db
-                st.success("✅ Document database initialized successfully!")
-                time.sleep(1)
-                st.rerun()
+    # Setup interface
+    st.title("IMEC Document Q&A System")
+    
+    # Ensure docs directory exists with PDF files
+    docs_available = ensure_docs_directory()
+    
     # Initialize feedback store if not already initialized
     if 'feedback_store' not in st.session_state:
         st.session_state.feedback_store = FeedbackStore()
     
     # Initialize LLM if not already initialized
     if 'llm' not in st.session_state:
-        st.session_state.llm = init_llm(api_keys['GROQ_API_KEY'], app_config)
+        try:
+            st.session_state.llm = init_llm(api_keys['GROQ_API_KEY'], app_config)
+        except Exception as e:
+            st.error(f"Error initializing LLM: {str(e)}")
+            st.error("Please check your API keys in the .env file.")
+            return
     
-    # Setup interface
-    st.title("IMEC Document Q&A System")
-    
+    # Handle the database initialization
+    if 'db' not in st.session_state or st.session_state.db is None:
+        if docs_available:
+            with st.spinner("Initializing document database..."):
+                try:
+                    db = DocumentDatabase(vector_config)
+                    if db.initialize_vector_stores():
+                        st.session_state.db = db
+                        st.success("✅ Document database initialized successfully!")
+                    else:
+                        st.session_state.db = None
+                        st.warning("Failed to initialize the database. Please check your documents and try again.")
+                except Exception as e:
+                    st.session_state.db = None
+                    st.error(f"Error initializing database: {str(e)}")
+                    st.error("Please check your documents and API keys.")
+        else:
+            st.warning("Please add PDF documents to the docs directory before initializing the database.")
+            
+    # Add sidebar controls
     with st.sidebar:
         st.header("Settings")
         if st.button("🔄 Reinitialize Database"):
-            st.session_state.db.reinitialize()
-            st.success("Database reinitialized successfully!")
-            st.rerun()
+            if 'db' in st.session_state:
+                # Properly clear database from session state before reinitializing
+                old_db = st.session_state.db
+                st.session_state.db = None
+                
+                # Only try to reinitialize if documents are available
+                if docs_available:
+                    with st.spinner("Reinitializing database..."):
+                        try:
+                            db = DocumentDatabase(vector_config)
+                            if db.initialize_vector_stores():
+                                st.session_state.db = db
+                                st.success("Database reinitialized successfully!")
+                                st.rerun()
+                            else:
+                                st.warning("Failed to reinitialize the database. Please check your documents.")
+                        except Exception as e:
+                            st.error(f"Error reinitializing database: {str(e)}")
+                else:
+                    st.warning("Please add PDF documents to the docs directory first.")
     
     # Create input interface and handle submission
     question, ask_button = create_input_interface()
