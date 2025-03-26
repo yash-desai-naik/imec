@@ -5,7 +5,7 @@ from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain_core.prompts import ChatPromptTemplate
 from config import load_config
 from database import DocumentDatabase
-from streamlit_app.utils import is_toc_query
+from utils import is_toc_query  # Changed from streamlit_app.utils to utils
 from prompts import REGULAR_PROMPT, TOC_PROMPT
 # Import and apply CSS
 from styles import get_css_styles
