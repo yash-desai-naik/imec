@@ -1,6 +1,7 @@
 import streamlit as st
 import time
 import os
+from pathlib import Path
 from langchain_groq import ChatGroq
 from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain_core.prompts import ChatPromptTemplate
@@ -150,26 +151,66 @@ def create_input_interface():
     
     return question, ask_button
 
-def ensure_docs_directory():
-    """Ensure the docs directory exists"""
-    docs_dir = "./docs"
+def find_docs_directory():
+    """Find the docs directory with better path resolution"""
+    # Check multiple possible locations
+    possible_paths = [
+        "./docs",  # Current directory
+        "docs",    # Relative path
+        "../docs", # Parent directory
+        "streamlit_app/docs", # App directory
+        os.path.join(os.path.dirname(__file__), "docs"), # File directory
+        os.path.abspath("docs"), # Absolute path
+    ]
+    
+    # Try each path and show debug info
+    found_paths = []
+    for path in possible_paths:
+        abs_path = os.path.abspath(path)
+        if os.path.exists(abs_path):
+            found_paths.append((path, abs_path, len([f for f in os.listdir(abs_path) if f.lower().endswith('.pdf')])))
+    
+    return found_paths
+
+def ensure_docs_directory(app_config):
+    """Ensure the docs directory exists with better debugging"""
+    docs_dir = app_config.docs_dir
+    
+    # Try to find docs directory in multiple locations
+    found_paths = find_docs_directory()
+    
+    if found_paths:
+        # Display found paths
+        st.info("Found potential docs directories:")
+        for orig_path, abs_path, pdf_count in found_paths:
+            st.code(f"Path: {orig_path}\nFull path: {abs_path}\nPDF files: {pdf_count}")
+        
+        # Use the first path with PDFs
+        pdf_paths = [p for p in found_paths if p[2] > 0]
+        if pdf_paths:
+            path_to_use = pdf_paths[0][1]
+            app_config.docs_dir = path_to_use
+            st.success(f"Using docs directory: {path_to_use} with {pdf_paths[0][2]} PDF files")
+            return True
+        else:
+            # Found directories but no PDFs
+            st.warning("Found docs directories but no PDF files in them.")
+    
+    # Nothing found - show current directory info
+    st.error("Could not find docs directory with PDF files")
+    st.info(f"Current working directory: {os.getcwd()}")
+    st.info(f"Directory contents: {os.listdir('.')}")
+    
+    # Check if specified docs directory exists
     if not os.path.exists(docs_dir):
         os.makedirs(docs_dir)
-        st.warning(f"""
-        The docs directory was created at {docs_dir}.
-        
-        Please add PDF documents to this directory for analysis.
-        """)
+        st.warning(f"Created docs directory at {docs_dir}. Please add PDF documents.")
         return False
         
     # Check if directory contains PDF files
     pdf_files = [f for f in os.listdir(docs_dir) if f.lower().endswith('.pdf')]
     if not pdf_files:
-        st.warning(f"""
-        No PDF files found in {docs_dir}.
-        
-        Please add PDF documents to this directory for analysis.
-        """)
+        st.warning(f"No PDF files found in {docs_dir}. Please add PDF documents.")
         return False
         
     return True
@@ -185,8 +226,8 @@ def main():
     # Setup interface
     st.title("IMEC Document Q&A System")
     
-    # Ensure docs directory exists with PDF files
-    docs_available = ensure_docs_directory()
+    # Enhanced docs directory check
+    docs_available = ensure_docs_directory(app_config)
     
     # Initialize feedback store if not already initialized
     if 'feedback_store' not in st.session_state:
@@ -207,6 +248,8 @@ def main():
             with st.spinner("Initializing document database..."):
                 try:
                     db = DocumentDatabase(vector_config)
+                    # Update the docs_dir in the database to match found path
+                    db.docs_dir = app_config.docs_dir
                     if db.initialize_vector_stores():
                         st.session_state.db = db
                         st.success("✅ Document database initialized successfully!")
@@ -234,6 +277,8 @@ def main():
                     with st.spinner("Reinitializing database..."):
                         try:
                             db = DocumentDatabase(vector_config)
+                            # Update the docs_dir in the database to match found path
+                            db.docs_dir = app_config.docs_dir
                             if db.initialize_vector_stores():
                                 st.session_state.db = db
                                 st.success("Database reinitialized successfully!")
